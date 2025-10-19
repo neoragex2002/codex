@@ -15,7 +15,10 @@ pub struct AuthContext {
 
 impl AuthContext {
     pub fn new(codex_home: Option<PathBuf>) -> Result<Self> {
-        Ok(Self { codex_home, auth: Arc::new(std::sync::Mutex::new(None)) })
+        Ok(Self {
+            codex_home,
+            auth: Arc::new(std::sync::Mutex::new(None)),
+        })
     }
 
     fn codex_home_path(&self) -> PathBuf {

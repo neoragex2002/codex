@@ -18,7 +18,9 @@ use tiny_http::StatusCode;
 mod support;
 use support::auth_loader::AuthContext;
 use support::headers::build_upstream_headers;
+use support::logging::{log_inbound_request, log_upstream_request, log_upstream_response};
 use support::router::Router;
+use support::translate::translate_openai_responses_to_codex;
 use support::utils::write_server_info;
 
 /// CLI arguments for the backend proxy.
@@ -97,7 +99,8 @@ pub fn run_main(args: Args) -> Result<()> {
                 std::process::exit(0);
             }
 
-            if let Err(e) = handle_request(&client, &runtime, &auth_ctx, &router, verbose, request) {
+            if let Err(e) = handle_request(&client, &runtime, &auth_ctx, &router, verbose, request)
+            {
                 if verbose {
                     eprintln!("proxy error: {e:#}");
                 } else {
@@ -152,22 +155,29 @@ fn handle_request(
     // Basic routing log to aid debugging (no sensitive data).
     let method_dbg = format!("{method:?}");
     if verbose {
-        eprintln!("proxy route: {method_dbg} {url_path} -> {}", route.upstream_url);
+        eprintln!(
+            "proxy route: {method_dbg} {url_path} -> {}",
+            route.upstream_url
+        );
     }
 
     // Read request body
     let mut body = Vec::new();
     let mut reader = req.as_reader();
     std::io::Read::read_to_end(&mut reader, &mut body)?;
+    if verbose {
+        log_inbound_request(&req, &body);
+    }
 
     // Build upstream headers (may use async CodexAuth ops)
-    let mut headers = build_upstream_headers(runtime, auth_ctx).context("building upstream headers")?;
+    let mut headers =
+        build_upstream_headers(runtime, auth_ctx).context("building upstream headers")?;
     // Ensure Host header matches upstream domain.
     if let Some(host) = support::headers::host_header_for(&route.upstream_url) {
         headers.insert(reqwest::header::HOST, host);
     }
 
-    // Forward selected incoming headers (excluding hop-by-hop and sensitive)
+    // Forward selected incoming headers (excluding hop-by-hop, sensitive, and length-related)
     for header in req.headers() {
         let name_ascii = header.field.as_str();
         let lower = name_ascii.to_ascii_lowercase();
@@ -184,6 +194,7 @@ fn handle_request(
                 | "trailer"
                 | "transfer-encoding"
                 | "upgrade"
+                | "content-length"
         ) {
             continue;
         }
@@ -197,17 +208,58 @@ fn handle_request(
         }
     }
 
+    // Translate request for Codex backend (Responses API)
+    // Force official instructions and optionally insert system as input_texts
+    let mut upstream_body = body.clone();
+    let mut is_stream = false;
+    if !body.is_empty() {
+        if let Ok(json_val) = serde_json::from_slice::<serde_json::Value>(&body) {
+            if let Ok((new_v, stream_flag, _modified)) =
+                translate_openai_responses_to_codex(json_val)
+            {
+                upstream_body = serde_json::to_vec(&new_v)?;
+                is_stream = stream_flag;
+            }
+        }
+    }
+
+    // Enforce required upstream headers
+    // - OpenAI-Beta: responses=experimental
+    if let Ok(name) = reqwest::header::HeaderName::from_bytes(b"OpenAI-Beta") {
+        let value = reqwest::header::HeaderValue::from_static("responses=experimental");
+        headers.insert(name, value);
+    }
+    // - Accept: text/event-stream if stream=true
+    if is_stream {
+        headers.insert(
+            reqwest::header::ACCEPT,
+            reqwest::header::HeaderValue::from_static("text/event-stream"),
+        );
+    }
+
+    if verbose {
+        log_upstream_request(&route.upstream_url, &headers, &upstream_body);
+    }
+
     // Upstream request
     let upstream_resp = client
         .post(route.upstream_url.as_str())
         .headers(headers.clone())
-        .body(body.clone())
+        .body(upstream_body.clone())
         .send()
-        .with_context(|| format!("forwarding {method_dbg} {url_path} to {}", route.upstream_url))?;
+        .with_context(|| {
+            format!(
+                "forwarding {method_dbg} {url_path} to {}",
+                route.upstream_url
+            )
+        })?;
 
     if verbose {
         let sc = upstream_resp.status();
-        eprintln!("upstream status: {} for {} {}", sc, method_dbg, route.upstream_url);
+        eprintln!(
+            "upstream status: {} for {} {}",
+            sc, method_dbg, route.upstream_url
+        );
     }
 
     if upstream_resp.status().as_u16() == 401 {
@@ -222,26 +274,70 @@ fn handle_request(
                 eprintln!("token refresh failed: {err}");
             }
         } else {
-            headers = build_upstream_headers(runtime, auth_ctx).context("rebuilding headers after refresh")?;
+            headers = build_upstream_headers(runtime, auth_ctx)
+                .context("rebuilding headers after refresh")?;
+            if let Some(host) = support::headers::host_header_for(&route.upstream_url) {
+                headers.insert(reqwest::header::HOST, host);
+            }
+            if let Ok(name) = reqwest::header::HeaderName::from_bytes(b"OpenAI-Beta") {
+                let value = reqwest::header::HeaderValue::from_static("responses=experimental");
+                headers.insert(name, value);
+            }
+            if is_stream {
+                headers.insert(
+                    reqwest::header::ACCEPT,
+                    reqwest::header::HeaderValue::from_static("text/event-stream"),
+                );
+            }
             let retry = client
                 .post(route.upstream_url.as_str())
                 .headers(headers)
-                .body(body)
+                .body(upstream_body)
                 .send()
-                .with_context(|| format!("forwarding (retry) {method_dbg} {url_path} to {}", route.upstream_url))?;
+                .with_context(|| {
+                    format!(
+                        "forwarding (retry) {method_dbg} {url_path} to {}",
+                        route.upstream_url
+                    )
+                })?;
             if verbose {
                 let sc = retry.status();
-                eprintln!("upstream status (retry): {} for {} {}", sc, method_dbg, route.upstream_url);
+                eprintln!(
+                    "upstream status (retry): {} for {} {}",
+                    sc, method_dbg, route.upstream_url
+                );
             }
-            return respond_stream(req, retry);
+            return respond_stream(req, retry, verbose);
         }
     }
 
-    respond_stream(req, upstream_resp)
+    respond_stream(req, upstream_resp, verbose)
 }
 
-fn respond_stream(req: Request, upstream_resp: reqwest::blocking::Response) -> Result<()> {
+struct Tee<R: std::io::Read> {
+    inner: R,
+    buf: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+}
+
+impl<R: std::io::Read> std::io::Read for Tee<R> {
+    fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+        let n = self.inner.read(out)?;
+        if n > 0 {
+            if let Ok(mut guard) = self.buf.lock() {
+                guard.extend_from_slice(&out[..n]);
+            }
+        }
+        Ok(n)
+    }
+}
+
+fn respond_stream(
+    req: Request,
+    upstream_resp: reqwest::blocking::Response,
+    verbose: bool,
+) -> Result<()> {
     let status = upstream_resp.status();
+    let headers_for_log = upstream_resp.headers().clone();
     let mut response_headers = Vec::new();
     for (name, value) in upstream_resp.headers().iter() {
         // Skip headers that tiny_http manages itself.
@@ -266,14 +362,27 @@ fn respond_stream(req: Request, upstream_resp: reqwest::blocking::Response) -> R
         }
     });
 
+    // Prepare tee reader to capture the upstream body while streaming to client
+    let buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
+    let tee = Tee {
+        inner: upstream_resp,
+        buf: buf.clone(),
+    };
+
     let response = Response::new(
         StatusCode(status.as_u16()),
         response_headers,
-        upstream_resp,
+        tee,
         content_length,
         None,
     );
 
     let _ = req.respond(response);
+
+    if verbose {
+        // Best-effort capture of response headers and body for logging
+        let logged_body = buf.lock().map(|v| v.clone()).unwrap_or_default();
+        log_upstream_response(status.as_u16(), &headers_for_log, &logged_body);
+    }
     Ok(())
 }

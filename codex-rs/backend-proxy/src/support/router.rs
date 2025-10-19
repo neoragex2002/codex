@@ -28,9 +28,6 @@ impl Router {
             (&Method::Post, "/v1/responses") => Some(Route {
                 upstream_url: format!("{}/responses", self.base_url),
             }),
-            (&Method::Post, "/v1/chat/completions") => Some(Route {
-                upstream_url: format!("{}/chat/completions", self.base_url),
-            }),
             _ => None,
         }
     }
