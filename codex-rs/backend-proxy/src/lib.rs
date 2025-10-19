@@ -18,7 +18,7 @@ use tiny_http::StatusCode;
 mod support;
 use support::auth_loader::AuthContext;
 use support::headers::build_upstream_headers;
-use support::logging::{log_inbound_request, log_upstream_request, log_upstream_response};
+use support::logging::{log_inbound_request, log_upstream_request, log_upstream_response, log_sse_start};
 use support::router::Router;
 use support::translate::translate_openai_responses_to_codex;
 use support::utils::write_server_info;
@@ -338,6 +338,16 @@ fn respond_stream(
 ) -> Result<()> {
     let status = upstream_resp.status();
     let headers_for_log = upstream_resp.headers().clone();
+    if verbose {
+        if let Some(ct) = headers_for_log
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+        {
+            if ct.to_ascii_lowercase().contains("text/event-stream") {
+                log_sse_start("upstream");
+            }
+        }
+    }
     let mut response_headers = Vec::new();
     for (name, value) in upstream_resp.headers().iter() {
         // Skip headers that tiny_http manages itself.
