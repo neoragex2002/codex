@@ -920,6 +920,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-backend-proxy"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "base64",
+ "clap",
+ "codex-core",
+ "codex-process-hardening",
+ "ctor 0.5.0",
+ "dirs",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tiny_http",
+ "tokio",
+ "url",
+ "zeroize",
+]
+
+[[package]]
 name = "codex-chatgpt"
 version = "0.0.0"
 dependencies = [

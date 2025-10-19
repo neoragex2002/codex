@@ -1,0 +1,31 @@
+[package]
+edition = "2024"
+name = "codex-backend-proxy"
+version = { workspace = true }
+
+[lib]
+name = "codex_backend_proxy"
+path = "src/lib.rs"
+
+[[bin]]
+name = "codex-backend-proxy"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+codex-core = { workspace = true }
+codex-process-hardening = { workspace = true }
+ctor = { workspace = true }
+reqwest = { workspace = true, features = ["blocking", "json", "rustls-tls"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tiny_http = { workspace = true }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread"] }
+url = { workspace = true }
+zeroize = { workspace = true }
+dirs = { workspace = true }
+base64 = { workspace = true }

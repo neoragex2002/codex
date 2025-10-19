@@ -28,6 +28,7 @@ members = [
     "protocol-ts",
     "rmcp-client",
     "responses-api-proxy",
+    "backend-proxy",
     "otel",
     "tui",
     "git-apply",
