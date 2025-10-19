@@ -54,6 +54,7 @@
   - 删除 Codex 不支持字段：
     - `max_output_tokens`、`max_completion_tokens`
     - `temperature`、`top_p`、`presence_penalty`、`frequency_penalty`
+    - `service_tier`
   - 其他未在移除清单中的字段保持原样透传，尽量减少入参干预（例如 `text` 选项块保持不动）。
 - 不主动改写工具与内容语义（MCP 工具等保持透明）。
 

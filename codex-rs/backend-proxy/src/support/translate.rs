@@ -145,6 +145,7 @@ pub fn translate_openai_responses_to_codex(mut v: Value) -> Result<(Value, bool,
             "top_p",
             "presence_penalty",
             "frequency_penalty",
+            "service_tier",
         ] {
             obj.remove(key);
         }
