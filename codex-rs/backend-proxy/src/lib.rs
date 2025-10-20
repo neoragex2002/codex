@@ -155,10 +155,12 @@ fn handle_request(
     // Basic routing log to aid debugging (no sensitive data).
     let method_dbg = format!("{method:?}");
     if verbose {
+        eprintln!("============================================================================================");
         eprintln!(
             "proxy route: {method_dbg} {url_path} -> {}",
             route.upstream_url
         );
+        eprintln!("============================================================================================");
     }
 
     // Read request body
@@ -256,10 +258,12 @@ fn handle_request(
 
     if verbose {
         let sc = upstream_resp.status();
+        eprintln!("============================================================================================");
         eprintln!(
             "upstream status: {} for {} {}",
             sc, method_dbg, route.upstream_url
         );
+        eprintln!("============================================================================================");
     }
 
     if upstream_resp.status().as_u16() == 401 {
