@@ -18,7 +18,9 @@ use tiny_http::StatusCode;
 mod support;
 use support::auth_loader::AuthContext;
 use support::headers::build_upstream_headers;
-use support::logging::{log_inbound_request, log_upstream_request, log_upstream_response, log_sse_start};
+use support::logging::{
+    log_inbound_request, log_sse_start, log_upstream_request, log_upstream_response,
+};
 use support::router::Router;
 use support::translate::translate_openai_responses_to_codex;
 use support::utils::write_server_info;
@@ -155,12 +157,16 @@ fn handle_request(
     // Basic routing log to aid debugging (no sensitive data).
     let method_dbg = format!("{method:?}");
     if verbose {
-        eprintln!("============================================================================================");
+        eprintln!(
+            "============================================================================================"
+        );
         eprintln!(
             "proxy route: {method_dbg} {url_path} -> {}",
             route.upstream_url
         );
-        eprintln!("============================================================================================");
+        eprintln!(
+            "============================================================================================"
+        );
     }
 
     // Read request body
@@ -258,12 +264,16 @@ fn handle_request(
 
     if verbose {
         let sc = upstream_resp.status();
-        eprintln!("============================================================================================");
+        eprintln!(
+            "============================================================================================"
+        );
         eprintln!(
             "upstream status: {} for {} {}",
             sc, method_dbg, route.upstream_url
         );
-        eprintln!("============================================================================================");
+        eprintln!(
+            "============================================================================================"
+        );
     }
 
     if upstream_resp.status().as_u16() == 401 {
@@ -342,14 +352,14 @@ fn respond_stream(
 ) -> Result<()> {
     let status = upstream_resp.status();
     let headers_for_log = upstream_resp.headers().clone();
+    let is_sse = headers_for_log
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(|ct| ct.to_ascii_lowercase().contains("text/event-stream"))
+        .unwrap_or(false);
     if verbose {
-        if let Some(ct) = headers_for_log
-            .get(reqwest::header::CONTENT_TYPE)
-            .and_then(|v| v.to_str().ok())
-        {
-            if ct.to_ascii_lowercase().contains("text/event-stream") {
-                log_sse_start("upstream");
-            }
+        if is_sse {
+            log_sse_start("upstream");
         }
     }
     let mut response_headers = Vec::new();
@@ -365,6 +375,17 @@ fn respond_stream(
             tiny_http::Header::from_bytes(name.as_str().as_bytes(), value.as_bytes())
         {
             response_headers.push(header);
+        }
+    }
+
+    // Strengthen SSE passthrough against intermediary buffering when streaming
+    if is_sse {
+        if let Ok(h1) = tiny_http::Header::from_bytes(b"Cache-Control", b"no-cache") {
+            response_headers.push(h1);
+        }
+        // Many reverse proxies (e.g., nginx) respect this header to disable buffering
+        if let Ok(h2) = tiny_http::Header::from_bytes(b"X-Accel-Buffering", b"no") {
+            response_headers.push(h2);
         }
     }
 

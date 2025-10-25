@@ -1,8 +1,8 @@
 use std::fmt::Write as _;
 
 use reqwest::header::HeaderMap;
+use serde_json::{Value, json};
 use tiny_http::Request;
-use serde_json::{json, Value};
 
 const MAX_HEADER_VALUE: usize = 200;
 const MAX_BODY_PREVIEW: usize = 4000; // characters (fallback only)
@@ -48,12 +48,15 @@ fn truncate_json_value(v: &Value, truncated: &mut bool) -> Value {
         }
         Value::Array(arr) => {
             let mut any = false;
-            let new = arr.iter().map(|x| {
-                let mut t = false;
-                let nv = truncate_json_value(x, &mut t);
-                any = any || t;
-                nv
-            }).collect::<Vec<_>>();
+            let new = arr
+                .iter()
+                .map(|x| {
+                    let mut t = false;
+                    let nv = truncate_json_value(x, &mut t);
+                    any = any || t;
+                    nv
+                })
+                .collect::<Vec<_>>();
             *truncated = *truncated || any;
             Value::Array(new)
         }
@@ -99,7 +102,9 @@ fn format_sse_with_field_truncation(s: &str) -> (String, bool) {
         } else {
             // Other lines, just limit length for safety
             let _ = writeln!(out, "{}", truncate_str(line, MAX_TEXT_LINE));
-            if line.len() > MAX_TEXT_LINE { any_truncated = true; }
+            if line.len() > MAX_TEXT_LINE {
+                any_truncated = true;
+            }
         }
     }
     (out, any_truncated)
@@ -117,10 +122,17 @@ fn pretty_preview(bytes: &[u8]) -> (String, bool) {
     match std::str::from_utf8(bytes) {
         Ok(s) => {
             // Heuristically treat as SSE if it contains lines starting with "event:" or "data:"
-            if s.contains("\nevent:") || s.starts_with("event:") || s.contains("\ndata: ") || s.starts_with("data: ") {
+            if s.contains("\nevent:")
+                || s.starts_with("event:")
+                || s.contains("\ndata: ")
+                || s.starts_with("data: ")
+            {
                 return format_sse_with_field_truncation(s);
             }
-            (truncate_str(s, MAX_BODY_PREVIEW), s.len() > MAX_BODY_PREVIEW)
+            (
+                truncate_str(s, MAX_BODY_PREVIEW),
+                s.len() > MAX_BODY_PREVIEW,
+            )
         }
         Err(_) => {
             // Hex dump small binary bodies
@@ -158,7 +170,10 @@ pub fn log_inbound_request(req: &Request, body: &[u8]) {
         "body_truncated": truncated,
     });
     eprintln!("{}", serde_json::to_string_pretty(&obj).unwrap_or_default());
-    eprintln!("--- inbound body (preview) ---\n{}\n--- end body ---", preview);
+    eprintln!(
+        "--- inbound body (preview) ---\n{}\n--- end body ---",
+        preview
+    );
 }
 
 pub fn log_upstream_request(url: &str, headers: &HeaderMap, body: &[u8]) {
@@ -178,7 +193,10 @@ pub fn log_upstream_request(url: &str, headers: &HeaderMap, body: &[u8]) {
         "body_truncated": truncated,
     });
     eprintln!("{}", serde_json::to_string_pretty(&obj).unwrap_or_default());
-    eprintln!("--- upstream request body (preview) ---\n{}\n--- end body ---", preview);
+    eprintln!(
+        "--- upstream request body (preview) ---\n{}\n--- end body ---",
+        preview
+    );
 }
 
 pub fn log_upstream_response(status: u16, headers: &HeaderMap, body: &[u8]) {
@@ -197,7 +215,10 @@ pub fn log_upstream_response(status: u16, headers: &HeaderMap, body: &[u8]) {
         "body_truncated": truncated,
     });
     eprintln!("{}", serde_json::to_string_pretty(&obj).unwrap_or_default());
-    eprintln!("--- upstream response body (preview) ---\n{}\n--- end body ---", preview);
+    eprintln!(
+        "--- upstream response body (preview) ---\n{}\n--- end body ---",
+        preview
+    );
 }
 
 pub fn log_sse_start(url: &str) {
