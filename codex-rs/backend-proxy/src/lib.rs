@@ -31,7 +31,7 @@ use support::utils::write_server_info;
 #[derive(Debug, Clone, Parser)]
 #[command(
     name = "codex-backend-proxy",
-    about = "OpenAI-compatible proxy to ChatGPT backend"
+    about = "OpenAI-compatible proxy to OpenAI/ChatGPT Codex backends"
 )]
 pub struct Args {
     /// Port to listen on. If not set, an ephemeral port is used.
@@ -46,7 +46,8 @@ pub struct Args {
     #[arg(long)]
     pub http_shutdown: bool,
 
-    /// Override the default base url for ChatGPT backend (default: https://chatgpt.com/backend-api/codex)
+    /// Override the upstream base URL.
+    /// Defaults: OAuth → https://chatgpt.com/backend-api/codex, API Key → https://api.openai.com/v1
     #[arg(long, value_name = "URL")]
     pub base_url: Option<String>,
 
@@ -247,8 +248,8 @@ fn handle_request(
         }
     }
 
-    // Translate request for ChatGPT backend only; otherwise pass through.
-    // Always detect stream=true for Accept header downstream.
+    // Translate request for Codex/Responses in all auth modes. If parse/translate
+    // fails, fall back to detecting stream=true for Accept header.
     let mut upstream_body = body.clone();
     let mut is_stream = false;
     let is_chatgpt = auth_ctx.is_chatgpt();
