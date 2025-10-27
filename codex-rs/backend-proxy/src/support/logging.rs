@@ -27,7 +27,7 @@ fn redact_header_pair(name: &str, value: &str) -> (String, String) {
         let redacted = if value.len() > 8 {
             let (head, tail) = value.split_at(value.len() - 4);
             let stars = "*".repeat(head.len());
-            format!("{}{}", stars, tail)
+            format!("{stars}{tail}")
         } else {
             "****".to_string()
         };
@@ -83,22 +83,22 @@ fn format_sse_with_field_truncation(s: &str) -> (String, bool) {
     for line in s.lines() {
         if let Some(rest) = line.strip_prefix("data: ") {
             let trimmed = rest.trim();
-            if trimmed.starts_with('{') || trimmed.starts_with('[') {
-                if let Ok(val) = serde_json::from_str::<Value>(trimmed) {
-                    let mut t = false;
-                    let val2 = truncate_json_value(&val, &mut t);
-                    any_truncated = any_truncated || t;
-                    if let Ok(pretty) = serde_json::to_string_pretty(&val2) {
-                        let _ = writeln!(out, "data: {}", pretty.replace('\n', "\n"));
-                        continue;
-                    }
+            if (trimmed.starts_with('{') || trimmed.starts_with('['))
+                && let Ok(val) = serde_json::from_str::<Value>(trimmed)
+            {
+                let mut t = false;
+                let val2 = truncate_json_value(&val, &mut t);
+                any_truncated = any_truncated || t;
+                if let Ok(pretty) = serde_json::to_string_pretty(&val2) {
+                    let _ = writeln!(out, "data: {pretty}");
+                    continue;
                 }
             }
             // Non-JSON data or parse failed; truncate the line
             let _ = writeln!(out, "data: {}", truncate_str(trimmed, MAX_TEXT_LINE));
             any_truncated = true;
         } else if line.starts_with("event:") || line.starts_with(":") || line.is_empty() {
-            let _ = writeln!(out, "{}", line);
+            let _ = writeln!(out, "{line}");
         } else {
             // Other lines, just limit length for safety
             let _ = writeln!(out, "{}", truncate_str(line, MAX_TEXT_LINE));
@@ -142,7 +142,7 @@ fn pretty_preview(bytes: &[u8]) -> (String, bool) {
                 if i > 0 && i % 16 == 0 {
                     let _ = writeln!(out);
                 }
-                let _ = write!(out, "{:02x} ", b);
+                let _ = write!(out, "{b:02x} ");
                 if i > 1024 {
                     let _ = write!(out, "... (truncated)");
                     truncated = true;
@@ -170,10 +170,7 @@ pub fn log_inbound_request(req: &Request, body: &[u8]) {
         "body_truncated": truncated,
     });
     eprintln!("{}", serde_json::to_string_pretty(&obj).unwrap_or_default());
-    eprintln!(
-        "--- inbound body (preview) ---\n{}\n--- end body ---",
-        preview
-    );
+    eprintln!("--- inbound body (preview) ---\n{preview}\n--- end body ---");
 }
 
 pub fn log_upstream_request(url: &str, headers: &HeaderMap, body: &[u8]) {
@@ -193,10 +190,7 @@ pub fn log_upstream_request(url: &str, headers: &HeaderMap, body: &[u8]) {
         "body_truncated": truncated,
     });
     eprintln!("{}", serde_json::to_string_pretty(&obj).unwrap_or_default());
-    eprintln!(
-        "--- upstream request body (preview) ---\n{}\n--- end body ---",
-        preview
-    );
+    eprintln!("--- upstream request body (preview) ---\n{preview}\n--- end body ---");
 }
 
 pub fn log_upstream_response(status: u16, headers: &HeaderMap, body: &[u8]) {
@@ -215,10 +209,7 @@ pub fn log_upstream_response(status: u16, headers: &HeaderMap, body: &[u8]) {
         "body_truncated": truncated,
     });
     eprintln!("{}", serde_json::to_string_pretty(&obj).unwrap_or_default());
-    eprintln!(
-        "--- upstream response body (preview) ---\n{}\n--- end body ---",
-        preview
-    );
+    eprintln!("--- upstream response body (preview) ---\n{preview}\n--- end body ---");
 }
 
 pub fn log_sse_start(url: &str) {

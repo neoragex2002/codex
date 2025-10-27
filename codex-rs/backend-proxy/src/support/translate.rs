@@ -24,13 +24,13 @@ fn as_string_opt(v: &Value) -> Option<String> {
 }
 
 fn ensure_bool(v: &mut Value, key: &str, value: bool) {
-    if !v.get(key).is_some() {
+    if v.get(key).is_none() {
         v[key] = Value::Bool(value);
     }
 }
 
 fn ensure_include_reasoning(v: &mut Value) {
-    if !v.get("include").is_some() {
+    if v.get("include").is_none() {
         v["include"] = Value::Array(vec![Value::String(
             "reasoning.encrypted_content".to_string(),
         )]);
@@ -59,19 +59,18 @@ pub fn translate_openai_responses_to_codex(mut v: Value) -> Result<(Value, bool,
         system_text = Some(ui);
     }
     // Non-standard: allow top-level `system` if present
-    if system_text.is_none() {
-        if let Some(sys) = v.get("system").and_then(as_string_opt) {
-            if !sys.trim().is_empty() {
-                system_text = Some(sys);
-            }
-        }
+    if system_text.is_none()
+        && let Some(sys) = v.get("system").and_then(as_string_opt)
+        && !sys.trim().is_empty()
+    {
+        system_text = Some(sys);
     }
 
     // Force official instructions
     v["instructions"] = Value::String(official.to_string());
 
     // Input array
-    if !v.get("input").is_some() {
+    if v.get("input").is_none() {
         v["input"] = Value::Array(vec![]);
     }
     let mut input = v.get("input").cloned().context("input must be an array")?;
@@ -79,34 +78,31 @@ pub fn translate_openai_responses_to_codex(mut v: Value) -> Result<(Value, bool,
 
     // Also support a leading system message inside input; capture and remove it
     let mut removed_system_from_input = false;
-    if system_text.is_none() {
-        if let Value::Array(arr) = &input {
-            if let Some(first) = arr.first()
-                && first
-                    .get("type")
-                    .and_then(|t| t.as_str())
-                    .unwrap_or("message")
-                    == "message"
-                && first.get("role").and_then(|r| r.as_str()) == Some("system")
+    if system_text.is_none()
+        && let Value::Array(arr) = &input
+        && let Some(first) = arr.first()
+        && first
+            .get("type")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("message")
+            == "message"
+        && first.get("role").and_then(serde_json::Value::as_str) == Some("system")
+        && let Some(contents) = first.get("content").and_then(serde_json::Value::as_array)
+    {
+        let mut buf = String::new();
+        for c in contents {
+            if c.get("type").and_then(serde_json::Value::as_str) == Some("input_text")
+                && let Some(text) = c.get("text").and_then(serde_json::Value::as_str)
             {
-                if let Some(contents) = first.get("content").and_then(|c| c.as_array()) {
-                    let mut buf = String::new();
-                    for c in contents {
-                        if c.get("type").and_then(|t| t.as_str()) == Some("input_text") {
-                            if let Some(text) = c.get("text").and_then(|t| t.as_str()) {
-                                if !buf.is_empty() {
-                                    buf.push('\n');
-                                }
-                                buf.push_str(text);
-                            }
-                        }
-                    }
-                    if !buf.trim().is_empty() {
-                        system_text = Some(buf);
-                        removed_system_from_input = true;
-                    }
+                if !buf.is_empty() {
+                    buf.push('\n');
                 }
+                buf.push_str(text);
             }
+        }
+        if !buf.trim().is_empty() {
+            system_text = Some(buf);
+            removed_system_from_input = true;
         }
     }
     if let Some(text) = system_text {
@@ -158,7 +154,10 @@ pub fn translate_openai_responses_to_codex(mut v: Value) -> Result<(Value, bool,
     }
 
     // Read stream flag (used to decide Accept header upstream)
-    let is_stream = v.get("stream").and_then(|s| s.as_bool()).unwrap_or(false);
+    let is_stream = v
+        .get("stream")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
 
     Ok((v, is_stream, modified))
 }

@@ -16,6 +16,8 @@ use tiny_http::Server;
 use tiny_http::StatusCode;
 
 mod support;
+use codex_core::config::{ConfigToml, load_config_as_toml_with_cli_overrides};
+use codex_core::WireApi;
 use support::auth_loader::AuthContext;
 use support::headers::build_upstream_headers;
 use support::logging::{
@@ -81,9 +83,29 @@ pub fn run_main(args: Args) -> Result<()> {
     // Load auth context once; operations that require async are bridged via runtime.
     let auth_ctx = Arc::new(AuthContext::new(args.codex_home.clone())?);
 
-    let base_url = args
-        .base_url
-        .unwrap_or_else(|| "https://chatgpt.com/backend-api/codex".to_string());
+    // Resolve base_url precedence: CLI flag > config.toml provider base_url > default by auth mode
+    let base_url = if let Some(url) = args.base_url.clone() {
+        url
+    } else {
+        // Try to read model_providers.<id>.base_url from ~/.codex/config.toml when available
+        let codex_home = args.codex_home.clone().unwrap_or_else(|| {
+            dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("~"))
+                .join(".codex")
+        });
+        let cfg_toml = runtime.block_on(async {
+            load_config_as_toml_with_cli_overrides(&codex_home, Vec::new()).await
+        });
+        let default_by_auth = if auth_ctx.is_chatgpt() {
+            "https://chatgpt.com/backend-api/codex".to_string()
+        } else {
+            "https://api.openai.com/v1".to_string()
+        };
+        match cfg_toml {
+            Ok(cfg) => resolved_base_url_from_config(&cfg).unwrap_or(default_by_auth),
+            Err(_) => default_by_auth,
+        }
+    };
     let router = Arc::new(Router::new(&base_url)?);
 
     eprintln!("codex-backend-proxy listening on {bound_addr}; base_url={base_url}");
@@ -113,6 +135,15 @@ pub fn run_main(args: Args) -> Result<()> {
     }
 
     Err(anyhow!("server stopped unexpectedly"))
+}
+
+fn resolved_base_url_from_config(cfg: &ConfigToml) -> Option<String> {
+    let provider_id = cfg.model_provider.as_ref()?;
+    let provider = cfg.model_providers.get(provider_id)?;
+    if provider.wire_api != WireApi::Responses {
+        return None;
+    }
+    provider.base_url.clone()
 }
 
 fn bind_listener(bind: &str, port: Option<u16>) -> Result<(TcpListener, SocketAddr)> {
@@ -216,18 +247,24 @@ fn handle_request(
         }
     }
 
-    // Translate request for Codex backend (Responses API)
-    // Force official instructions and optionally insert system as input_texts
+    // Translate request for ChatGPT backend only; otherwise pass through.
+    // Always detect stream=true for Accept header downstream.
     let mut upstream_body = body.clone();
     let mut is_stream = false;
-    if !body.is_empty() {
-        if let Ok(json_val) = serde_json::from_slice::<serde_json::Value>(&body) {
-            if let Ok((new_v, stream_flag, _modified)) =
-                translate_openai_responses_to_codex(json_val)
-            {
-                upstream_body = serde_json::to_vec(&new_v)?;
-                is_stream = stream_flag;
-            }
+    let is_chatgpt = auth_ctx.is_chatgpt();
+    if !body.is_empty()
+        && let Ok(json_val) = serde_json::from_slice::<serde_json::Value>(&body)
+    {
+        if let Ok((new_v, stream_flag, _modified)) =
+            translate_openai_responses_to_codex(json_val.clone())
+        {
+            upstream_body = serde_json::to_vec(&new_v)?;
+            is_stream = stream_flag;
+        } else {
+            is_stream = json_val
+                .get("stream")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
         }
     }
 
@@ -276,7 +313,7 @@ fn handle_request(
         );
     }
 
-    if upstream_resp.status().as_u16() == 401 {
+    if is_chatgpt && upstream_resp.status().as_u16() == 401 {
         // Attempt one refresh and retry once.
         if verbose {
             eprintln!("upstream 401: attempting token refresh");
@@ -336,10 +373,8 @@ struct Tee<R: std::io::Read> {
 impl<R: std::io::Read> std::io::Read for Tee<R> {
     fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
         let n = self.inner.read(out)?;
-        if n > 0 {
-            if let Ok(mut guard) = self.buf.lock() {
-                guard.extend_from_slice(&out[..n]);
-            }
+        if n > 0 && let Ok(mut guard) = self.buf.lock() {
+            guard.extend_from_slice(&out[..n]);
         }
         Ok(n)
     }
@@ -357,10 +392,8 @@ fn respond_stream(
         .and_then(|v| v.to_str().ok())
         .map(|ct| ct.to_ascii_lowercase().contains("text/event-stream"))
         .unwrap_or(false);
-    if verbose {
-        if is_sse {
-            log_sse_start("upstream");
-        }
+    if verbose && is_sse {
+        log_sse_start("upstream");
     }
     let mut response_headers = Vec::new();
     for (name, value) in upstream_resp.headers().iter() {

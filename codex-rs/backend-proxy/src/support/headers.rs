@@ -11,14 +11,16 @@ pub fn build_upstream_headers(
     runtime: &tokio::runtime::Runtime,
     auth_ctx: &AuthContext,
 ) -> Result<HeaderMap> {
-    let (token, account_id) = auth_ctx.bearer_and_account_id(runtime)?;
+    let (token, maybe_account_id) = auth_ctx.bearer_and_optional_account_id(runtime)?;
     let mut headers = HeaderMap::new();
 
     let mut auth_header_value = HeaderValue::from_str(&format!("Bearer {token}"))?;
     auth_header_value.set_sensitive(true);
     headers.insert(AUTHORIZATION, auth_header_value);
 
-    if let Ok(name) = HeaderName::from_bytes(b"ChatGPT-Account-Id") {
+    if let Some(account_id) = maybe_account_id
+        && let Ok(name) = HeaderName::from_bytes(b"ChatGPT-Account-Id")
+    {
         let hv = HeaderValue::from_str(&account_id)?;
         headers.insert(name, hv);
     }

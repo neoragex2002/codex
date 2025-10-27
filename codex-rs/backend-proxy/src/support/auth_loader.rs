@@ -54,10 +54,14 @@ impl AuthContext {
         Ok(())
     }
 
-    pub fn bearer_and_account_id(
+    // Note: bearer_and_account_id removed in favor of bearer_and_optional_account_id
+
+    /// Returns bearer token and optional ChatGPT account_id. If running with an
+    /// API key (non-ChatGPT), the account_id will be None.
+    pub fn bearer_and_optional_account_id(
         &self,
         runtime: &tokio::runtime::Runtime,
-    ) -> Result<(String, String)> {
+    ) -> Result<(String, Option<String>)> {
         let auth = self.load_or_get()?;
         let auth_for_token = auth.clone();
         let token = runtime
@@ -72,10 +76,16 @@ impl AuthContext {
             account_id = Some(parsed);
         }
 
-        let account_id = account_id.ok_or_else(|| {
-            anyhow::anyhow!("ChatGPT account_id missing; please re-login to populate auth.json")
-        })?;
         Ok((token, account_id))
+    }
+
+    /// Heuristic: treat as ChatGPT auth when an account_id is present in the
+    /// cached auth.json data.
+    pub fn is_chatgpt(&self) -> bool {
+        self.load_or_get()
+            .ok()
+            .and_then(|a| a.get_account_id())
+            .is_some()
     }
 }
 
